@@ -79,6 +79,24 @@ void KeyframeInterpolation::load(
   std::vector<Eigen::Isometry3d> poses{};
   if (odom_format == "kitti") {
     poses = file_io_->load_kitti_odom(odom_path);
+    // Load pcd cloud filenames
+    std::cout << "Loading pcd-clouds from " << pcd_dir << std::endl;
+    std::vector<std::string> pcd_filenames = file_io_->load_clouds(pcd_dir);
+    // Check if sizes match
+    if (pcd_filenames.size() != poses.size()) {
+      std::cerr << "Number of pcd files and poses do not match: " << pcd_filenames.size() << " vs "
+                << poses.size() << std::endl;
+      return;
+    }
+
+    // Load pcd files and creates frames
+    for (size_t i = 0; i < pcd_filenames.size(); ++i) {
+      auto frame = OdometryFrame::load(pcd_filenames[i], poses[i], this->downsample_resolution_);
+      if (frame == nullptr) {
+        continue;
+      }
+      this->frames_.push_back(frame);
+    }
   } else if (odom_format == "glim") {
     std::vector<double> timestamps{};
     poses = file_io_->load_glim_odom(odom_path, timestamps);
@@ -86,24 +104,6 @@ void KeyframeInterpolation::load(
     throw std::runtime_error(
       "Unknown odometry format: " + odom_format + ". Supported formats are: kitti, glim");
     return;
-  }
-  // Load pcd cloud filenames
-  std::cout << "Loading pcd-clouds from " << pcd_dir << std::endl;
-  std::vector<std::string> pcd_filenames = file_io_->load_clouds(pcd_dir);
-  // Check if sizes match
-  if (pcd_filenames.size() != poses.size()) {
-    std::cerr << "Number of pcd files and poses do not match: " << pcd_filenames.size() << " vs "
-              << poses.size() << std::endl;
-    return;
-  }
-
-  // Load pcd files and creates frames
-  for (size_t i = 0; i < pcd_filenames.size(); ++i) {
-    auto frame = OdometryFrame::load(pcd_filenames[i], poses[i], this->downsample_resolution_);
-    if (frame == nullptr) {
-      continue;
-    }
-    this->frames_.push_back(frame);
   }
   std::cout << "Loaded " << this->frames_.size() << " odometry frames" << std::endl;
 }
@@ -144,12 +144,7 @@ bool KeyframeInterpolation::save(
   } else if (odom_format == "glim") {
     if (!file_io_->save_accumulated_cloud(dst_directory + "/map.pcd", this->keyframes_, this->downsample_resolution_)) {
       return false;
-    }
   }
-  std::cout << "Everything saved successfully" << std::endl;
-  return true;
-}
-/**
  * @brief Select keyframes
  *
  * @param[in] keyframe_delta_x     - float:
