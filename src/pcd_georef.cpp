@@ -30,7 +30,7 @@ namespace flexcloud
 // pcd_georef package constructor
 pcd_georef::pcd_georef(
   const std::string & config_path, const std::string & ref_path, const std::string & slam_path,
-  const std::string & pcd_path, const std::string & pcd_out_path = "pcd_georef.pcd")
+  const std::string & pcd_path = "")
 {
   // Load config from file
   YAML::Node config = YAML::LoadFile(config_path);
@@ -39,13 +39,11 @@ pcd_georef::pcd_georef(
   this->config_.traj_path = ref_path;
   this->config_.poses_path = slam_path;
   this->config_.pcd_path = pcd_path;
-  this->config_.pcd_out_path = pcd_out_path;
   this->config_.dim = config["dim"].as<int>();
   this->config_.transform_traj = config["transform_traj"].as<bool>();
   this->config_.rs_num_controlPoints = config["rs_num_controlPoints"].as<int>();
   this->config_.stddev_threshold = config["stddev_threshold"].as<double>();
   this->config_.square_size = config["square_size"].as<std::vector<double>>();
-  this->config_.transform_pcd = config["transform_pcd"].as<bool>();
   this->config_.exclude_ind = config["exclude_ind"].as<std::vector<int64_t>>();
   this->config_.shift_ind = config["shift_ind"].as<std::vector<int64_t>>();
   this->config_.shift_ind_dist = config["shift_ind_dist"].as<std::vector<double>>();
@@ -120,7 +118,7 @@ bool pcd_georef::paths_valid()
   }
 
   // Check pcd path if true
-  if (this->config_.transform_pcd) {
+  if (this->config_.pcd_path != "") {
     std::ifstream infile2(this->config_.pcd_path);
     if (infile2.is_open()) {
       infile2.close();
@@ -157,7 +155,7 @@ void pcd_georef::load_data()
   }
 
   // PCD map
-  if (this->config_.transform_pcd) {
+  if (this->config_.pcd_path != "") {
     if (file_io_->read_pcd_from_file(this->config_, this->config_.pcd_path, this->pcd_map)) {
       std::cout << "\033[1;36mPoint Cloud with " << pcd_map->width * pcd_map->height
                 << " points: Loaded!\033[0m" << std::endl;
@@ -217,7 +215,7 @@ void pcd_georef::rubber_sheeting()
   transform_.transform_ls_rs(this->traj_align, this->traj_rs, this->triag_);
 
   // Transform point cloud map if desired by user
-  if (this->config_.transform_pcd) {
+  if (this->config_.pcd_path != "") {
     if (this->config_.use_threading) {
       transform_.transform_pcd(
         this->umeyama_, this->triag_, this->pcd_map, this->config_.num_cores);
@@ -242,7 +240,7 @@ void pcd_georef::visualize_rs()
   this->viz_->linestring2rerun(this->traj_rs, this->rec_, "Orange", "Trajectory_RS");
 
   // PCD map
-  if (this->config_.transform_pcd) {
+  if (this->config_.pcd_path != "") {
     this->viz_->pc_map2rerun(this->pcd_map, this->rec_);
   }
 }
@@ -251,10 +249,13 @@ void pcd_georef::visualize_rs()
  */
 void pcd_georef::write_map()
 {
-  if (this->config_.transform_pcd) {
-    if (file_io_->write_pcd_to_path(this->config_.pcd_out_path, this->pcd_map)) {
-      std::cout << "\033[1;36mPoint Cloud Map written to " << config_.pcd_out_path << "!\033[0m"
-                << std::endl;
+  if (this->config_.pcd_path != "") {
+    std::string path =
+      this->config_.pcd_path.substr(0, this->config_.pcd_path.find_last_of("\\/")) + "/georef_" +
+      this->config_.pcd_path.substr(this->config_.pcd_path.find_last_of("/\\") + 1);
+
+    if (file_io_->write_pcd_to_path(path, this->pcd_map)) {
+      std::cout << "\033[1;36mPoint Cloud Map written to " << path << "!\033[0m" << std::endl;
     } else {
       std::cout << "!! Error during Map writing !!" << std::endl;
     }
@@ -290,11 +291,9 @@ int main(int argc, char * argv[])
     return 1;
   }
   if (argc == 4) {
-    flexcloud::pcd_georef pcd_georef(argv[1], argv[2], argv[3], "", "");
+    flexcloud::pcd_georef pcd_georef(argv[1], argv[2], argv[3], "");
   } else if (argc == 5) {
-    flexcloud::pcd_georef pcd_georef(argv[1], argv[2], argv[3], argv[4], "");
-  } else if (argc == 6) {
-    flexcloud::pcd_georef pcd_georef(argv[1], argv[2], argv[3], argv[4], argv[5]);
+    flexcloud::pcd_georef pcd_georef(argv[1], argv[2], argv[3], argv[4]);
   } else {
     std::cerr << "Too many arguments" << std::endl;
     return 1;

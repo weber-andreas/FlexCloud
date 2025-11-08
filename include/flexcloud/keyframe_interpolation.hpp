@@ -41,9 +41,6 @@ public:
   KeyframeInterpolation(
     const std::string & config_path, const std::string & pos_dir, const std::string & odom_path,
     const std::string & dst_directory);
-  KeyframeInterpolation(
-    const std::string & config_path, const std::string & pos_dir, const std::string & odom_path,
-    const std::string & pcd_dir, const std::string & dst_directory);
   void visualize();
 
 private:
@@ -76,7 +73,7 @@ private:
    * @param[in] dst_directory       - std::string:
    *                                  absolute path to directory
    */
-  bool save(const std::string & dst_directory, const std::string & odom_format) const;
+  bool save(const std::string & dst_directory) const;
   /**
    * @brief Select keyframes
    */
@@ -126,6 +123,6 @@ private:
   float downsample_resolution_{0.1f};
   bool interpolate_{false};
   float pos_delta_xyz_{1.0f};
-  std::int64_t globalMaxTimeDiff_{};
+  std::int64_t global_time_diff_{};
 };
 }  // namespace flexcloud

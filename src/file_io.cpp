@@ -297,44 +297,6 @@ bool file_io::read_poses_SLAM_from_file(
   return true;
 }
 /**
- * @brief Load pcd point clouds from a directory
- *
- * @param[in] directory           - std::string:
- *                                  absolute path to directory
- * @return std::vector<std::string>:
- *                                  vector of pcd filenames
- */
-std::vector<std::string> file_io::load_clouds(const std::string & directory)
-{
-  std::vector<std::string> pcd_filenames{};
-  // Load filenames from directory
-  boost::filesystem::directory_iterator dir_itr(directory);
-  boost::filesystem::directory_iterator end;
-  // Count number of files
-  int count = 0;
-  boost::filesystem::path dirPath(directory);
-  try {
-    for (const auto & entry : boost::filesystem::directory_iterator(dirPath)) {
-      if (boost::filesystem::is_regular_file(entry) && entry.path().extension() == ".pcd") {
-        ++count;
-      }
-    }
-  } catch (const boost::filesystem::filesystem_error & ex) {
-    std::cerr << "Error accessing directory: " << ex.what() << std::endl;
-  }
-
-  for (dir_itr; dir_itr != end; dir_itr++) {
-    if (dir_itr->path().extension() != ".pcd") {
-      continue;
-    }
-
-    std::string file_path = directory + "/" + dir_itr->path().stem().string() + ".pcd";
-    pcd_filenames.push_back(file_path);
-  }
-  std::sort(pcd_filenames.begin(), pcd_filenames.end());
-  return pcd_filenames;
-}
-/**
  * @brief read pcd map from file
  *
  * @param[in] config              - FlexCloudConfig:
@@ -367,64 +329,6 @@ bool file_io::read_pcd_from_file(
 /**
  * @brief save kitti odometry to file
  *
- * @param[in] filename            - std::string:
- *                                  absolute path to file
- * @param[in] keyframes           - std::vector<std::shared_ptr<OdometryFrame>>:
- *                                  vector of keyframes
- */
-bool file_io::save_graph(
-  const std::string & filename, const std::vector<std::shared_ptr<OdometryFrame>> & keyframes)
-{
-  std::ofstream ofs(filename);
-  if (!ofs) {
-    return false;
-  }
-
-  // Write vertices
-  for (size_t i = 0; i < keyframes.size(); i++) {
-    ofs << "VERTEX_SE3:QUAT " << i << " ";
-    const Eigen::Vector3d translation = keyframes[i]->pose.translation();
-    const Eigen::Quaterniond quaternion(keyframes[i]->pose.rotation());
-
-    ofs << translation.x() << " " << translation.y() << " " << translation.z() << " "
-        << quaternion.x() << " " << quaternion.y() << " " << quaternion.z() << " "
-        << quaternion.w();
-    ofs << std::endl;
-  }
-  // Fix first vertex
-  ofs << "FIX 0" << std::endl;
-
-  // Write edges
-  for (size_t i = 0; i < keyframes.size() - 1; i++) {
-    const auto & delta_pose = keyframes[i]->pose.inverse() * keyframes[i + 1]->pose;
-    const Eigen::Vector3d translation = delta_pose.translation();
-    const Eigen::Quaterniond quaternion(delta_pose.rotation());
-
-    Eigen::MatrixXd inf = Eigen::MatrixXd::Identity(6, 6);
-    inf.block<3, 3>(0, 0) *= 10.0;
-    inf.block<3, 3>(3, 3) *= 20.0;
-
-    ofs << "EDGE_SE3:QUAT " << i << " " << i + 1 << " ";
-    // Write delta pose
-    ofs << translation.x() << " " << translation.y() << " " << translation.z() << " "
-        << quaternion.x() << " " << quaternion.y() << " " << quaternion.z() << " " << quaternion.w()
-        << " ";
-    // Write information matrix
-    for (int row = 0; row < inf.rows(); ++row) {
-      for (int col = row; col < inf.cols(); ++col) {
-        ofs << inf(row, col) << " ";
-      }
-    }
-    ofs << std::endl;
-  }
-
-  ofs.close();
-
-  return true;
-}
-/**
- * @brief save kitti odometry to file
- *
  * @param[in] filename           - std::string:
  *                                  absolute path to file
  * @param[in] keyframes          - std::vector<std::shared_ptr<OdometryFrame>>:
@@ -449,40 +353,6 @@ bool file_io::save_kitti(
 
   return true;
 }
-/**
- * @brief save keyframes to directory
- *
- * @param[in] directory           - std::string:
- *                                  absolute path to directory
- * @param[in] keyframes           - std::vector<std::shared_ptr<OdometryFrame>>:
- *                                  vector of keyframes
- * @param[in] downsample          - float:
- *                                  downsample factor
- */
-bool file_io::save_keyframes(
-  const std::string & directory, const std::vector<std::shared_ptr<OdometryFrame>> & keyframes,
-  const float downsample)
-{
-  for (size_t i = 0; i < keyframes.size(); i++) {
-    std::string keyframe_directory = (boost::format("%s/%06d") % directory % i).str();
-    boost::filesystem::create_directories(keyframe_directory);
-
-    boost::filesystem::copy_file(keyframes[i]->raw_cloud_path, keyframe_directory + "/raw.pcd");
-    pcl::io::savePCDFileBinary(keyframe_directory + "/cloud.pcd", *keyframes[i]->cloud(downsample));
-
-    std::ofstream ofs(keyframe_directory + "/data");
-    if (!ofs) {
-      return false;
-    }
-
-    ofs << "stamp " << keyframes[i]->stamp_sec << " " << keyframes[i]->stamp_nsec << std::endl;
-    ofs << "estimate" << std::endl << keyframes[i]->pose.matrix() << std::endl;
-    ofs << "odom " << std::endl << keyframes[i]->pose.matrix() << std::endl;
-    ofs << "id " << i << std::endl;
-  }
-
-  return true;
-}
 bool file_io::save_pos_frames(
   const std::string & filename, const std::vector<PointStdDevStamped> & pos_keyframes)
 {
@@ -500,40 +370,6 @@ bool file_io::save_pos_frames(
   }
   ofs.close();
 
-  return true;
-}
-/**
- * @brief Accumulate all keyframes and save to single pcd file
- *
- * @param[in] path                - std::string:
- *                                  absolute path to file
- * @param[in] keyframes           - std::vector<std::shared_ptr<OdometryFrame>>:
- *                                  vector of keyframes
- * @param[in] downsample          - float:
- *                                  downsample factor
- */
-bool file_io::save_accumulated_cloud(
-  const std::string & path, const std::vector<std::shared_ptr<OdometryFrame>> & keyframes,
-  const float downsample)
-{
-  // Create output cloud
-  pcl::PointCloud<pcl::PointXYZI>::Ptr accumulated_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-
-  // Loop through all frames
-  for (size_t i = 0; i < keyframes.size(); i++) {
-    // Create temporary cloud for transformed points
-    pcl::PointCloud<pcl::PointXYZI>::Ptr transformed_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-
-    // Transform cloud using frame's pose
-    pcl::transformPointCloud(
-      *keyframes[i]->cloud(downsample), *transformed_cloud, keyframes[i]->pose.matrix());
-
-    // Accumulate points
-    *accumulated_cloud += *transformed_cloud;
-    std::cout << "Accumulated " << accumulated_cloud->size() << " points" << std::endl;
-  }
-  std::cout << "Total accumulated points: " << accumulated_cloud->size() << std::endl;
-  pcl::io::savePCDFileBinary(path, *accumulated_cloud);
   return true;
 }
 /**

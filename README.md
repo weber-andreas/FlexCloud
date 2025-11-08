@@ -69,7 +69,6 @@ If you are struggling with their installation, you can have a look at the proces
    * `config_path` => path to [config-file](./config/select_keyframes.yaml)
    * `pos_dir_path` => path to raw GNSS/reference trajectory of the vehicle (format: txt-file with `lat, lon, ele, lat_stddev, lon_stddev, ele_stddev` or `x, y, z, x_stddev, y_stddev, z_stddev`, if the reference trajectory is already in local coordinates)
    * `kitti_odom_path` => path to SLAM trajectory of the vehicle (KITTI-format)
-   * `pcd_dir_path` => path to point cloud frames corresponding to odom trajectory
    * `dst_dir_path` => path to output trajectory
 
 * make sure the data follows the following format/requirements:
@@ -97,11 +96,10 @@ computed in two ways (based on the parameter `interpolated`):
 * to run the keyframe interpolation, simply execute the executable with the necessary data and config as arguments:
 
 ```bash
-./select_keyframes <config_path> <pos_dir_path> <kitti_odom_path> <pcd_dir_path> <dst_dir_path>
+./select_keyframes <config_path> <pos_dir_path> <kitti_odom_path> <dst_dir_path>
 ```
 
-* the output of the Keyframe Interpolation is designed to be compatible with [interactive_slam](https://github.com/koide3/interactive_slam).
-* This enables the additional insertion of loop closures before applying the georeferencing step.
+* the output of the Keyframe Interpolation is designed to be compatible with the georeferencing.
 
 <h3> PCD Georeferencing</h3>
 * set parameters in `/config/pcd_georef.yaml`
@@ -110,13 +108,12 @@ computed in two ways (based on the parameter `interpolated`):
    * `config_path` => path to [config-file](./config/pcd_georef.yaml)
    * `traj_path` => path to GNSS/reference trajectory of the vehicle (format: single txt-file with `lat, lon, ele, lat_stddev, lon_stddev, ele_stddev` or `x, y, z, x_stddev, y_stddev, z_stddev`, if the reference trajectory is already in local coordinates)
    * `poses_path` => path to SLAM trajectory of the vehicle (KITTI-format)
-   * `pcd_path` => path to point cloud map corresponding to poses trajectory (OPTIONAL - only if `transform_pcd` set)
-   * `pcd_out_path` => path to save the final, georeferenced point cloud map (OPTIONAL - only if `transform_pcd` set - DEFAULT: /pcd_map_georef.pcd)
+   * `pcd_path` => path to point cloud map corresponding to poses trajectory (OPTIONAL - only if yout want to transform the pointcloud)
 
 2. Start the package
 
    ```bash
-   Usage: ./build/pcd_georef <config_path> <reference_path> <slam_path> <(optional) pcd_path> <(optional) pcd_out_path>
+   Usage: ./build/pcd_georef <config_path> <reference_path> <slam_path> <(optional) pcd_path>>
    ```
 
    To use the provided test data (only trajectories, no application on point cloud map -> set parameter `transform_pcd` to `false`)
@@ -166,7 +163,6 @@ Detailed documentation of the modules can be found below.
 * global coordinates may be projected into local coordinate system using ENU-coordinates from the [GeographicLib](https://geographiclib.sourceforge.io/2009-03/classGeographicLib_1_1LocalCartesian.html)
 
 <h4>2. Keyframe Interpolation</h4>
-- based on: <https://github.com/koide3/interactive_slam/blob/master/src/odometry2graph.cpp>
 - Selection of keyframes and interpolation of global position frames for map creation and manual optimization
 - Interpolation follows a third-order spline interpolation from [Eigen](https://eigen.tuxfamily.org/dox/unsupported/group__Splines__Module.html)
 

@@ -41,7 +41,7 @@ public:
   // pcd_georef package constructor
   pcd_georef(
     const std::string & config_path, const std::string & ref_path, const std::string & slam_path,
-    const std::string & pcd_path, const std::string & pcd_out_path);
+    const std::string & pcd_path);
   // Functions
   /**
    * @brief check if all necessary paths exist

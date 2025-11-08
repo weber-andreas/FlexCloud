@@ -31,28 +31,27 @@ namespace flexcloud
 {
 KeyframeInterpolation::KeyframeInterpolation(
   const std::string & config_path, const std::string & pos_dir, const std::string & odom_path,
-  const std::string & pcd_dir, const std::string & dst_directory)
+  const std::string & dst_directory)
 {
-  this->globalMaxTimeDiff = 0.0f;
+  this->global_time_diff_ = 0.0f;
   // Load config
   YAML::Node config = YAML::LoadFile(config_path);
 
-  const std::string odom_format = config["odom_format"].as<std::string>();
   this->stddev_threshold_ = config["stddev_threshold"].as<float>();
-  const float keyframe_delta_x = config["keyframe_delta_x"].as<float>();
-  const float keyframe_delta_angle = config["keyframe_delta_angle"].as<float>();
+  this->keyframe_delta_x_ = config["keyframe_delta_x"].as<float>();
+  this->keyframe_delta_angle_ = config["keyframe_delta_angle"].as<float>();
   this->downsample_resolution_ = config["downsample_resolution"].as<float>();
   this->interpolate_ = config["interpolate"].as<bool>();
-  const float pos_delta_xyz = config["interp_pos_delta_xyz"].as<float>();
+  this->pos_delta_xyz_ = config["interp_pos_delta_xyz"].as<float>();
 
-  // Load position frames
-  load(pos_dir, odom_format, odom_path, pcd_dir);
+  // Load
+  load(pos_dir, odom_path);
 
   // Interpolate keyframes
-  select_keyframes(keyframe_delta_x, keyframe_delta_angle, this->interpolate_, pos_delta_xyz);
+  select_keyframes();
 
   // Save keyframes
-  save(dst_directory, odom_format);
+  save(dst_directory);
 }
 /**
  * @brief Load frames from a directory
@@ -64,9 +63,7 @@ KeyframeInterpolation::KeyframeInterpolation(
  * * @param[in] pcd_dir             - std::string:
  * *                                 absolute path to directory
  */
-void KeyframeInterpolation::load(
-  const std::string & pos_dir, const std::string & odom_format, const std::string & odom_path,
-  const std::string & pcd_dir)
+void KeyframeInterpolation::load(const std::string & pos_dir, const std::string & odom_path)
 {
   // Load position frames
   this->pos_frames_.clear();
@@ -77,34 +74,8 @@ void KeyframeInterpolation::load(
   // Load kitti odometry file
   std::cout << "Loading odometry poses from " << odom_path << std::endl;
   std::vector<Eigen::Isometry3d> poses{};
-  if (odom_format == "kitti") {
-    poses = file_io_->load_kitti_odom(odom_path);
-    // Load pcd cloud filenames
-    std::cout << "Loading pcd-clouds from " << pcd_dir << std::endl;
-    std::vector<std::string> pcd_filenames = file_io_->load_clouds(pcd_dir);
-    // Check if sizes match
-    if (pcd_filenames.size() != poses.size()) {
-      std::cerr << "Number of pcd files and poses do not match: " << pcd_filenames.size() << " vs "
-                << poses.size() << std::endl;
-      return;
-    }
-
-    // Load pcd files and creates frames
-    for (size_t i = 0; i < pcd_filenames.size(); ++i) {
-      auto frame = OdometryFrame::load(pcd_filenames[i], poses[i], this->downsample_resolution_);
-      if (frame == nullptr) {
-        continue;
-      }
-      this->frames_.push_back(frame);
-    }
-  } else if (odom_format == "glim") {
-    std::vector<double> timestamps{};
-    poses = file_io_->load_glim_odom(odom_path, timestamps);
-  } else {
-    throw std::runtime_error(
-      "Unknown odometry format: " + odom_format + ". Supported formats are: kitti, glim");
-    return;
-  }
+  std::vector<double> timestamps{};
+  poses = file_io_->load_glim_odom(odom_path, timestamps);
   std::cout << "Loaded " << this->frames_.size() << " odometry frames" << std::endl;
 }
 /**
@@ -113,8 +84,7 @@ void KeyframeInterpolation::load(
  * @param[in] dst_directory       - std::string:
  *                                 absolute path to directory
  */
-bool KeyframeInterpolation::save(
-  const std::string & dst_directory, const std::string & odom_format) const
+bool KeyframeInterpolation::save(const std::string & dst_directory) const
 {
   if (this->keyframes_.empty()) {
     return false;
@@ -132,32 +102,11 @@ bool KeyframeInterpolation::save(
   if (!file_io_->save_pos_frames(dst_directory + "/poseData.txt", this->pos_keyframes_)) {
     return false;
   }
-
-  // Save graph for kitti format and accumulated cloud for glim format
-  if (odom_format == "kitti") {
-    if (!file_io_->save_graph(dst_directory + "/graph.g2o", this->keyframes_)) {
-      return false;
-    }
-    if (!file_io_->save_keyframes(dst_directory, this->keyframes_, this->downsample_resolution_)) {
-      return false;
-    }
-  } else if (odom_format == "glim") {
-    if (!file_io_->save_accumulated_cloud(dst_directory + "/map.pcd", this->keyframes_, this->downsample_resolution_)) {
-      return false;
-  }
+}
+/**
  * @brief Select keyframes
- *
- * @param[in] keyframe_delta_x     - float:
- *                                 delta x for keyframe selection
- * @param[in] keyframe_delta_angle - float:
- *                                 delta angle for keyframe selection
- * @param[in] interpolate          - bool:
- *                                 interpolate keyframes
- * @param[in] pos_delta_xyz        - float:
- *                                 delta xyz for keyframe selection
  */
-void KeyframeInterpolation::select_keyframes(
-  float keyframe_delta_x, float keyframe_delta_angle, bool interpolate, float pos_delta_xyz)
+void KeyframeInterpolation::select_keyframes()
 {
   if (this->frames_.empty() || this->pos_frames_.empty()) {
     return;
@@ -168,9 +117,9 @@ void KeyframeInterpolation::select_keyframes(
 
   // Handle first frame
   this->keyframes_.push_back(this->frames_.front());
-  if (interpolate) {
+  if (this->interpolate_) {
     /* Interpolate position of frame */
-    this->pos_keyframes_.push_back(interpolate_pos(this->frames_.front(), pos_delta_xyz));
+    this->pos_keyframes_.push_back(interpolate_pos(this->frames_.front()));
   } else {
     /* Search GPS frame for first frame */
     this->pos_keyframes_.push_back(search_closest(this->frames_.front()));
@@ -185,12 +134,12 @@ void KeyframeInterpolation::select_keyframes(
     double delta_x = delta.translation().norm();
     double delta_angle = Eigen::AngleAxisd(delta.linear()).angle();
 
-    if (delta_x > keyframe_delta_x || delta_angle > keyframe_delta_angle) {
+    if (delta_x > this->keyframe_delta_x_ || delta_angle > this->keyframe_delta_angle_) {
       this->keyframes_.push_back(frame);
 
-      if (interpolate) {
+      if (this->interpolate_) {
         // Interpolate position of frame
-        this->pos_keyframes_.push_back(interpolate_pos(frame, pos_delta_xyz));
+        this->pos_keyframes_.push_back(interpolate_pos(frame));
       } else {
         // search for corresponding pos file that is closest (time) to frame
         this->pos_keyframes_.push_back(search_closest(frame));
@@ -198,10 +147,10 @@ void KeyframeInterpolation::select_keyframes(
     }
   }
 
-  if (!interpolate) {
+  if (!this->interpolate_) {
     // Output max time difference that occured during keyframe selection
     std::cout << "\033[1;32m"
-              << "Max time difference: " << (globalMaxTimeDiff / 1000000) << " ms"
+              << "Max time difference: " << (this->global_time_diff_ / 1000000) << " ms"
               << "\033[0m" << std::endl;
   }
 }
@@ -213,18 +162,20 @@ void KeyframeInterpolation::select_keyframes(
  * @return PointStdDevStamped    - PointStdDevStamped:
  *                                 closest PointStdDevStamped
  */
-PointStdDevStamped KeyframeInterpolation::search_closest(const std::shared_ptr<OdometryFrame> & frame)
+PointStdDevStamped KeyframeInterpolation::search_closest(
+  const std::shared_ptr<OdometryFrame> & frame)
 {
   auto closest_it = std::min_element(
-    pos_frames_.begin(), pos_frames_.end(), [&frame](const PointStdDevStamped & a, const PointStdDevStamped & b) {
+    pos_frames_.begin(), pos_frames_.end(),
+    [&frame](const PointStdDevStamped & a, const PointStdDevStamped & b) {
       return std::abs(frame->get_timestamp() - a.stamp) <
              std::abs(frame->get_timestamp() - b.stamp);
     });
 
   std::int64_t minDiff = std::abs(frame->get_timestamp() - closest_it->stamp);
 
-  if (minDiff > globalMaxTimeDiff) {
-    globalMaxTimeDiff = minDiff;
+  if (minDiff > this->global_time_diff_) {
+    this->global_time_diff_ = minDiff;
   }
 
   return *closest_it;
@@ -234,13 +185,11 @@ PointStdDevStamped KeyframeInterpolation::search_closest(const std::shared_ptr<O
  *
  * @param[in] frame              - std::shared_ptr<OdometryFrame>:
  *                                 frame to search for
- * @param[in] pos_delta_xyz      - float:
- *                                 delta xyz for keyframe selection
  * @return PointStdDevStamped     - PointStdDevStamped:
  *                                 interpolated PointStdDevStamped
  */
 PointStdDevStamped KeyframeInterpolation::interpolate_pos(
-  const std::shared_ptr<OdometryFrame> & frame, const float pos_delta_xyz)
+  const std::shared_ptr<OdometryFrame> & frame)
 {
   const int numFrames = 2;
 
@@ -256,8 +205,7 @@ PointStdDevStamped KeyframeInterpolation::interpolate_pos(
 
   // Sanity check to check if enough pos frames before first keyframe
   if (
-    lowerIndex < (numFrames - 1) ||
-    this->pos_frames_[lowerIndex].stamp > frame->get_timestamp()) {
+    lowerIndex < (numFrames - 1) || this->pos_frames_[lowerIndex].stamp > frame->get_timestamp()) {
     std::cout << std::fixed << std::setprecision(6);
     std::cout << "\033[31mNot enough Pos frames provided for smallest LiDAR frame with timestamp "
               << static_cast<double>(frame->get_timestamp()) / 1000000000 << "\033[0m" << std::endl;
@@ -271,7 +219,7 @@ PointStdDevStamped KeyframeInterpolation::interpolate_pos(
   for (int i = lowerIndex - 1; i >= 0 && selectedIndicesLow.size() < numFrames; --i) {
     if (
       i == 0 || this->pos_frames_[i].calc_dist(this->pos_frames_[selectedIndicesLow.back()]) >=
-                  pos_delta_xyz) {
+                  this->pos_delta_xyz_) {
       selectedIndicesLow.push_back(i);
     }
   }
@@ -281,7 +229,7 @@ PointStdDevStamped KeyframeInterpolation::interpolate_pos(
     if (
       i == this->pos_frames_.size() - 1 ||
       this->pos_frames_[i].calc_dist(this->pos_frames_[selectedIndicesHigh.back()]) >=
-        pos_delta_xyz) {
+        this->pos_delta_xyz_) {
       selectedIndicesHigh.push_back(i);
     }
   }
@@ -315,9 +263,8 @@ PointStdDevStamped KeyframeInterpolation::interpolate_pos(
   Eigen::MatrixXd points(4, num_support_points);
   for (int i = 0; i < num_support_points; ++i) {
     // compute timestamps in reference to very first pos frame
-    points(0, i) = std::abs(
-      this->pos_frames_[resultVector[0]].stamp -
-      this->pos_frames_[resultVector[i]].stamp);
+    points(0, i) =
+      std::abs(this->pos_frames_[resultVector[0]].stamp - this->pos_frames_[resultVector[i]].stamp);
     points(1, i) = this->pos_frames_[resultVector[i]].point.pos.x();
     points(2, i) = this->pos_frames_[resultVector[i]].point.pos.y();
     points(3, i) = this->pos_frames_[resultVector[i]].point.pos.z();
@@ -330,14 +277,12 @@ PointStdDevStamped KeyframeInterpolation::interpolate_pos(
   Eigen::Spline<double, 4> spline(fit);
 
   // Normalize the timestamp of the frame we are interested in to [0,1]
-  double divider =
-    std::abs(this->pos_frames_[resultVector[0]].stamp - frame->get_timestamp()) /
-    (points.row(0).maxCoeff() - points.row(0).minCoeff());
+  double divider = std::abs(this->pos_frames_[resultVector[0]].stamp - frame->get_timestamp()) /
+                   (points.row(0).maxCoeff() - points.row(0).minCoeff());
   const Eigen::Vector4d values = spline(divider);
 
   // TODO(Maxi): check stddev values of surrounding pos frames and interpolate accordingly
-  PointStdDev tmp_frame(
-    values[1], values[2], values[3], 0.0, 0.0, 0.0);
+  PointStdDev tmp_frame(values[1], values[2], values[3], 0.0, 0.0, 0.0);
   return PointStdDevStamped(tmp_frame, frame->get_timestamp());
 }
 void KeyframeInterpolation::visualize()

@@ -59,13 +59,8 @@ bool analysis::traj_matching(
   calc_diff(config, src, target_al, diff_al);
   calc_diff(config, src, target_rs, diff_rs);
 
-  // Extract path from output path
-  std::string path = config.pcd_out_path;
-  std::string::size_type pos = path.find_last_of("/");
-  if (pos != std::string::npos) {
-    path = path.substr(0, pos);
-  }
-  const std::string dir = path + "/traj_matching";
+  // Set working directory to current path
+  const std::string dir = "./traj_matching";
   // Create if not a directory
   if (!std::filesystem::is_directory(dir)) {
     std::filesystem::create_directories(dir);
@@ -136,7 +131,6 @@ void analysis::save_config(
     file << "traj_path=" << config.traj_path << std::endl;
     file << "poses_path=" << config.poses_path << std::endl;
     file << "pcd_path=" << config.pcd_path << std::endl;
-    file << "pcd_out_path=" << config.pcd_out_path << std::endl;
 
     // Write dimension
     file << "dim=" << config.dim << std::endl;
@@ -155,8 +149,6 @@ void analysis::save_config(
     file << std::endl;
 
     // Write PCD georeferencing parameters
-    file << "transform_pcd=" << (config.transform_pcd ? "true" : "false") << std::endl;
-
     file << "exclude_ind=";
     for (size_t i = 0; i < config.exclude_ind.size(); ++i) {
       file << config.exclude_ind[i];

@@ -25,7 +25,7 @@ int main(int argc, char * argv[])
   if (argc < 5) {
     // Tell the user how to run the program
     std::cerr << "Usage: " << argv[0]
-              << " <config_path> <pos_dir_path> <kitti_odom_path> <pcd_dir_path> <dst_dir_path>"
+              << " <config_path> <pos_dir_path> <kitti_odom_path> <dst_dir_path>"
               << std::endl;
     return 1;
   }
@@ -33,11 +33,9 @@ int main(int argc, char * argv[])
     // Only interpolation without accumulating clouds
     flexcloud::KeyframeInterpolation set_frames(argv[1], argv[2], argv[3], argv[4]);
     set_frames.visualize();
-  }
-  if (argc == 6) {
-    // Interpolation with accumulating clouds
-    flexcloud::KeyframeInterpolation set_frames(argv[1], argv[2], argv[3], argv[4], argv[5]);
-    set_frames.visualize();
+  } else {
+    std::cerr << "Too many arguments" << std::endl;
+    return 1;
   }
   return 0;
 }

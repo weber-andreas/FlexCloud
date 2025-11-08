@@ -36,7 +36,6 @@ struct FlexCloudConfig
   double stddev_threshold{0.5};
   std::vector<double> square_size{0.1, 0.1, 10.0};
   // PCD Georeferencing
-  bool transform_pcd{true};
   std::vector<int64_t> exclude_ind{};
   std::vector<int64_t> shift_ind{};
   std::vector<double> shift_ind_dist{};
