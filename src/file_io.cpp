@@ -34,13 +34,11 @@ namespace flexcloud
  * @return std::vector<PointStdDevStamped>:
  *                                  vector of position frames
  */
-std::vector<PointStdDevStamped> file_io::load_pos_frames(
+std::vector<PointStdDevStamped> file_io::load_positions_dir(
   const std::string & directory, const float stddev_threshold)
 {
   std::vector<PointStdDevStamped> pos_frames{};
   std::cout << "Loading position frames from " << directory << std::endl;
-  boost::filesystem::directory_iterator dir_itr(directory);
-  boost::filesystem::directory_iterator end;
 
   // Count number of files
   int count = 0;
@@ -55,12 +53,12 @@ std::vector<PointStdDevStamped> file_io::load_pos_frames(
     std::cerr << "Error accessing directory: " << ex.what() << std::endl;
   }
 
-  for (dir_itr; dir_itr != end; dir_itr++) {
-    if (dir_itr->path().extension() != ".txt") {
+  for (boost::filesystem::directory_iterator it(dirPath), it_end; it != it_end; ++it) {
+    if (it->path().extension() != ".txt") {
       continue;
     }
 
-    std::string filePath = directory + "/" + dir_itr->path().stem().string() + ".txt";
+    std::string filePath = directory + "/" + it->path().stem().string() + ".txt";
     std::ifstream inputFile(filePath);
     if (!inputFile.is_open()) {
       std::cerr << "Unable to open file" << std::endl;
@@ -98,56 +96,103 @@ std::vector<PointStdDevStamped> file_io::load_pos_frames(
   }
 
   // Sort frames based on timestamps (smallest TS first)
-  std::sort(pos_frames.begin(), pos_frames.end(), [](const PointStdDevStamped & a, const PointStdDevStamped & b) {
-    return a.stamp < b.stamp;
-  });
+  std::sort(
+    pos_frames.begin(), pos_frames.end(),
+    [](const PointStdDevStamped & a, const PointStdDevStamped & b) { return a.stamp < b.stamp; });
 
   std::cout << "Loaded " << pos_frames.size() << " global position frames" << std::endl;
   return pos_frames;
 }
 /**
- * @brief Load kitti odometry from a file
+ * @brief read traj from txt file
+ *
+ * @param[in] config              - GeoreferencingConfig:
+ *                                  config struct
+ * @param[in] path                 - std::string:
+ *                                  absolute path to file
  */
-std::vector<Eigen::Isometry3d> file_io::load_kitti_odom(const std::string & file_path)
+std::vector<PointStdDevStamped> file_io::load_positions(
+  const std::string & path, GeoreferencingConfig & config)
 {
-  std::vector<Eigen::Isometry3d> poses;
-  std::ifstream input_file(file_path);
-  if (!input_file.is_open()) {
-    std::cerr << "Unable to open file" << std::endl;
-    return poses;
-  }
+  std::vector<PointStdDevStamped> points_local{};
+  if (config.transform_traj) {
+    std::vector<PointStdDev> points_gps{};
 
-  std::string line;
-  // Read poses
-  double x, y, z;
-  float r1, r2, r3, r4, r5, r6, r7, r8, r9;
+    // Read trajectory in GPS format
+    double stamp, lat, lon, height, lat_stddev, lon_stddev, height_stddev;
 
-  while (std::getline(input_file, line)) {
-    std::istringstream iss(line);
+    std::ifstream infile(path);
+    std::string line;
 
-    if (!(iss >> r1 >> r2 >> r3 >> x >> r4 >> r5 >> r6 >> y >> r7 >> r8 >> r9 >> z)) {
-      std::cerr << "Error during extraction of odometry pose" << std::endl;
+    while (std::getline(infile, line)) {
+      std::istringstream iss(line);
+
+      if (!(iss >> stamp >> lat >> lon >> height >> lat_stddev >> lon_stddev >> height_stddev)) {
+        std::cout << "Trajectory in wrong format!" << std::endl;
+      }
+      PointStdDev gps_pt(lat, lon, height, lat_stddev, lon_stddev, height_stddev);
+      points_gps.emplace_back(gps_pt);
     }
-    Eigen::Matrix3d rotation;
-    rotation << r1, r2, r3, r4, r5, r6, r7, r8, r9;
 
-    Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
-    pose.linear() = rotation;
-    pose.translation() << x, y, z;
+    Eigen::Vector3d orig{0.0, 0.0, 0.0};
+    if (config.custom_origin) {
+      orig.x() = config.origin[0];
+      orig.y() = config.origin[1];
+      orig.z() = config.origin[2];
+    } else {
+      orig = points_gps[0].pos;
+    }
 
-    poses.push_back(pose);
+    std::cout << "\033[33mMap origin: " << orig.x() << " " << orig.y() << " " << orig.z()
+              << "\033[0m" << std::endl;
+
+    config.origin = {orig.x(), orig.y(), orig.z()};
+
+    // initialize GeographicLib origins and ellipsoids
+    const GeographicLib::NormalGravity & earth_WGS84 = GeographicLib::NormalGravity::WGS84();
+
+    GeographicLib::Geocentric WGS84ellipsoid =
+      GeographicLib::Geocentric(earth_WGS84.EquatorialRadius(), earth_WGS84.Flattening());
+
+    // initialize projection class
+    GeographicLib::LocalCartesian proj =
+      GeographicLib::LocalCartesian(orig.x(), orig.y(), orig.z(), WGS84ellipsoid);
+
+    for (const auto & gps : points_gps) {
+      PointStdDev pt_proj(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+      proj.Forward(
+        gps.pos.y(), gps.pos.x(), gps.pos.z(), pt_proj.pos.x(), pt_proj.pos.y(), pt_proj.pos.z());
+      pt_proj.stddev.x() = gps.stddev.x();
+      pt_proj.stddev.y() = gps.stddev.y();
+      pt_proj.stddev.z() = gps.stddev.z();
+      points_local.push_back(PointStdDevStamped(pt_proj, static_cast<int64_t>(stamp * 1e9)));
+    }
+  } else {
+    // Read poses
+    double stamp, x, y, z, x_stddev, y_stddev, z_stddev;
+
+    std::ifstream infile(path);
+    std::string line;
+
+    while (std::getline(infile, line)) {
+      std::istringstream iss(line);
+
+      if (!(iss >> stamp >> x >> y >> z >> x_stddev >> y_stddev >> z_stddev)) {
+        std::cout << "Trajectory in wrong format!" << std::endl;
+        throw std::invalid_argument("Trajectory in wrong format!");
+      }
+      points_local.push_back(PointStdDevStamped(
+        PointStdDev(x, y, z, x_stddev, y_stddev, z_stddev), static_cast<int64_t>(stamp * 1e9)));
+    }
   }
-  input_file.close();
-  return poses;
+  return points_local;
 }
 /**
  * @brief Load glim odometry from a file
  */
-std::vector<Eigen::Isometry3d> file_io::load_glim_odom(
-  const std::string & file_path, std::vector<double> & timestamps)
+std::vector<PoseStamped> file_io::load_poses(const std::string & file_path)
 {
-  std::vector<Eigen::Isometry3d> poses;
-  timestamps.clear();
+  std::vector<PoseStamped> poses{};
   std::ifstream input_file(file_path);
   if (!input_file.is_open()) {
     std::cerr << "Unable to open file" << std::endl;
@@ -165,150 +210,21 @@ std::vector<Eigen::Isometry3d> file_io::load_glim_odom(
     if (!(iss >> stamp >> x >> y >> z >> qx >> qy >> qz >> qw)) {
       std::cerr << "Error during extraction of odometry pose" << std::endl;
     }
-    Eigen::Matrix3d rotation;
-    rotation = Eigen::Quaterniond(qw, qx, qy, qz).toRotationMatrix();
-
-    Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
-    pose.linear() = rotation;
-    pose.translation() << x, y, z;
-
-    poses.push_back(pose);
-    timestamps.push_back(stamp);
+    Pose pose(x, y, z, qx, qy, qz, qw);
+    poses.push_back(PoseStamped(pose, stamp));
   }
   input_file.close();
   return poses;
 }
 /**
- * @brief read traj from txt file
- *
- * @param[in] config              - FlexCloudConfig:
- *                                  config struct
- * @param[in] traj_path           - std::string:
- *                                  absolute path to file
- * @param[in] traj_local          - std::vector<PointStdDev>:
- *                                  trajectory as vector of positions with standard dev
- */
-bool file_io::read_traj_from_file(
-  FlexCloudConfig & config, const std::string & traj_path, std::vector<PointStdDev> & traj_local)
-{
-  traj_local.clear();
-  if (config.transform_traj) {
-    std::vector<PointStdDev> traj_gps;
-
-    // Read trajectory in GPS format
-    double lat, lon, height, lat_stddev, lon_stddev, height_stddev;
-
-    std::ifstream infile(traj_path);
-    std::string line;
-
-    while (std::getline(infile, line)) {
-      std::istringstream iss(line);
-
-      if (!(iss >> lat >> lon >> height >> lat_stddev >> lon_stddev >> height_stddev)) {
-        std::cout << "Trajectory in wrong format!" << std::endl;
-      }
-      PointStdDev gps_pt(lat, lon, height, lat_stddev, lon_stddev, height_stddev);
-      traj_gps.emplace_back(gps_pt);
-    }
-
-    double orig_lat, orig_lon, orig_ele;
-    if (config.customZeroPoint) {
-      orig_lat = config.zeroPoint[0];
-      orig_lon = config.zeroPoint[1];
-      orig_ele = config.zeroPoint[2];
-    } else {
-      orig_lat = traj_gps[0].pos.x();
-      orig_lon = traj_gps[0].pos.y();
-      orig_ele = traj_gps[0].pos.z();
-    }
-
-    std::cout << "\033[33mMap origin: " << orig_lat << " " << orig_lon << " " << orig_ele
-              << "\033[0m" << std::endl;
-
-    config.zeroPoint = {orig_lat, orig_lon, orig_ele};
-
-    // initialize GeographicLib origins and ellipsoids
-    const GeographicLib::NormalGravity & earth_WGS84 = GeographicLib::NormalGravity::WGS84();
-
-    GeographicLib::Geocentric WGS84ellipsoid =
-      GeographicLib::Geocentric(earth_WGS84.EquatorialRadius(), earth_WGS84.Flattening());
-
-    // initialize projection class
-    GeographicLib::LocalCartesian proj =
-      GeographicLib::LocalCartesian(orig_lat, orig_lon, orig_ele, WGS84ellipsoid);
-
-    for (const auto & gps : traj_gps) {
-      PointStdDev pt_proj(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-      proj.Forward(gps.pos.y(), gps.pos.x(), gps.pos.z(), pt_proj.pos.x(), pt_proj.pos.y(), pt_proj.pos.z());
-      pt_proj.stddev.x() = gps.stddev.x();
-      pt_proj.stddev.y() = gps.stddev.y();
-      pt_proj.stddev.z() = gps.stddev.z();
-      traj_local.push_back(pt_proj);
-    }
-  } else {
-    // Read poses
-    double x, y, z, x_stddev, y_stddev, z_stddev;
-
-    std::ifstream infile(traj_path);
-    std::string line;
-
-    while (std::getline(infile, line)) {
-      std::istringstream iss(line);
-
-      if (!(iss >> x >> y >> z >> x_stddev >> y_stddev >> z_stddev)) {
-        std::cout << "Trajectory in wrong format!" << std::endl;
-        return false;
-      }
-      traj_local.push_back(PointStdDev(x, y, z, x_stddev, y_stddev, z_stddev));
-    }
-  }
-  return true;
-}
-/**
- * @brief read poses from txt file in KITTI format
- *
- * @param[in] config              - FlexCloudConfig:
- *                                  config struct
- * @param[in] poses_path          - std::string:
- *                                  absolute path to file
- * @param[in] poses               - std::vector<PointStdDev>:
- *                                  trajectory as vector of positions with standard dev
- */
-bool file_io::read_poses_SLAM_from_file(
-  FlexCloudConfig & config, const std::string & poses_path, std::vector<PointStdDev> & poses)
-{
-  poses.clear();
-  // Read poses
-  double x, y, z;
-  float r1, r2, r3, r4, r5, r6, r7, r8, r9;
-
-  std::ifstream infile(poses_path);
-  std::string line;
-
-  while (std::getline(infile, line)) {
-    std::istringstream iss(line);
-
-    if (!(iss >> r1 >> r2 >> r3 >> x >> r4 >> r5 >> r6 >> y >> r7 >> r8 >> r9 >> z)) {
-      std::cout << "Poses in wrong format!" << std::endl;
-      return false;
-    }
-    poses.push_back(PointStdDev(x, y, z, 0.0, 0.0, 0.0));
-  }
-  return true;
-}
-/**
  * @brief read pcd map from file
  *
- * @param[in] config              - FlexCloudConfig:
- *                                  config struct
  * @param[in] pcd_path            - std::string:
  *                                  absolute path to file
  * @param[in] pcm                 - pcl::PointCloud<pcl::PointXYZ>::Ptr:
  *                                  pointer on pointcloud map
  */
-bool file_io::read_pcd_from_file(
-  FlexCloudConfig & config, const std::string & pcd_path,
-  pcl::PointCloud<pcl::PointXYZI>::Ptr & pcm)
+bool file_io::load_pcd(const std::string & pcd_path, pcl::PointCloud<pcl::PointXYZI>::Ptr & pcm)
 {
   // Check for valid filename
   if (pcd_path.substr(pcd_path.length() - 4) != ".pcd") {
@@ -327,6 +243,36 @@ bool file_io::read_pcd_from_file(
   return true;
 }
 /**
+ * @brief save position frames to file
+ *
+ * @param[in] filename            - std::string:
+ *                                  absolute path to file
+ * @param[in] keyframes           - std::vector<std::shared_ptr<PoseStamped>>:
+ *                                  vector of keyframes
+ */
+bool file_io::save_positions(
+  const std::string & filename, const std::vector<PointStdDevStamped> & positions)
+{
+  std::ofstream ofs(filename);
+  if (!ofs) {
+    return false;
+  }
+  // clang-format off
+  for (const auto & pos : positions) {
+    ofs << std::fixed << std::setprecision(14) << pos.stamp * 1.0e-9 << " "
+        << std::fixed << std::setprecision(14) << pos.point.pos.x() << " "
+        << std::fixed << std::setprecision(14) << pos.point.pos.y() << " "
+        << std::fixed << std::setprecision(14) << pos.point.pos.z() << " "
+        << std::fixed << std::setprecision(14) << pos.point.stddev.x() << " "
+        << std::fixed << std::setprecision(14) << pos.point.stddev.y() << " "
+        << std::fixed << std::setprecision(14) << pos.point.stddev.z() << " " << std::endl;
+  }
+  // clang-format on
+  ofs.close();
+
+  return true;
+}
+/**
  * @brief save kitti odometry to file
  *
  * @param[in] filename           - std::string:
@@ -334,39 +280,18 @@ bool file_io::read_pcd_from_file(
  * @param[in] keyframes          - std::vector<std::shared_ptr<OdometryFrame>>:
  *                                  vector of keyframes
  */
-bool file_io::save_kitti(
-  const std::string & filename, const std::vector<std::shared_ptr<OdometryFrame>> & keyframes)
+bool file_io::save_poses(const std::string & filename, const std::vector<PoseStamped> & poses)
 {
   std::ofstream ofs(filename);
   if (!ofs) {
     return false;
   }
-  for (size_t i = 0; i < keyframes.size(); i++) {
-    const Eigen::Matrix3d rotation = keyframes[i]->pose.rotation();
-    const Eigen::Vector3d translation = keyframes[i]->pose.translation();
-    ofs << rotation(0, 0) << " " << rotation(0, 1) << " " << rotation(0, 2) << " "
-        << translation.x() << " " << rotation(1, 0) << " " << rotation(1, 1) << " "
-        << rotation(1, 2) << " " << translation.y() << " " << rotation(2, 0) << " "
-        << rotation(2, 1) << " " << rotation(2, 2) << " " << translation.z() << std::endl;
-  }
-  ofs.close();
-
-  return true;
-}
-bool file_io::save_pos_frames(
-  const std::string & filename, const std::vector<PointStdDevStamped> & pos_keyframes)
-{
-  std::ofstream ofs(filename);
-  if (!ofs) {
-    return false;
-  }
-  for (const auto & frame : pos_keyframes) {
-    ofs << std::fixed << std::setprecision(14) << frame.point.pos.x() << " " << std::fixed
-        << std::setprecision(14) << frame.point.pos.y() << " " << std::fixed
-        << std::setprecision(14) << frame.point.pos.z() << " " << std::fixed
-        << std::setprecision(14) << frame.point.stddev.x() << " " << std::fixed
-        << std::setprecision(14) << frame.point.stddev.y() << " " << std::fixed
-        << std::setprecision(14) << frame.point.stddev.z() << " " << std::endl;
+  for (size_t i = 0; i < poses.size(); i++) {
+    const Eigen::Quaterniond rotation(poses[i].pose.pose.rotation());
+    const Eigen::Vector3d translation = poses[i].pose.pose.translation();
+    ofs << poses[i].stamp << " " << translation.x() << " " << translation.y() << " "
+        << translation.z() << " " << rotation.x() << " " << rotation.y() << " " << rotation.z()
+        << " " << rotation.w() << std::endl;
   }
   ofs.close();
 
@@ -375,14 +300,14 @@ bool file_io::save_pos_frames(
 /**
  * @brief write pcd map to file
  *
- * @param[in] config              - FlexCloudConfig:
+ * @param[in] config              - GeoreferencingConfig:
  *                                  config struct
  * @param[in] pcd_out_path        - std::string:
  *                                  absolute path to file
  * @param[in] pcm                 - pcl::PointCloud<pcl::PointXYZ>::Ptr:
  *                                  pointer on pointcloud map
  */
-bool file_io::write_pcd_to_path(
+bool file_io::save_pcd(
   const std::string & pcd_out_path, const pcl::PointCloud<pcl::PointXYZI>::Ptr & pcd_map)
 {
   // write to file

@@ -16,30 +16,28 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "pcd_georef.hpp"
+#include "georeferencing.hpp"
 
 #include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "yaml-cpp/yaml.h"
 namespace flexcloud
 {
 // Constructor
 // pcd_georef package constructor
-pcd_georef::pcd_georef(
-  const std::string & config_path, const std::string & ref_path, const std::string & slam_path,
-  const std::string & pcd_path = "")
+Georeferencing::Georeferencing(
+  const std::string & config_path, const std::string & pos_global_path,
+  const std::string & poses_path, const std::string & pcd_path = "")
 {
   // Load config from file
   YAML::Node config = YAML::LoadFile(config_path);
 
   // Set parameters
-  this->config_.traj_path = ref_path;
-  this->config_.poses_path = slam_path;
+  this->config_.pos_global_path = pos_global_path;
+  this->config_.poses_path = poses_path;
   this->config_.pcd_path = pcd_path;
-  this->config_.dim = config["dim"].as<int>();
   this->config_.transform_traj = config["transform_traj"].as<bool>();
   this->config_.rs_num_controlPoints = config["rs_num_controlPoints"].as<int>();
   this->config_.stddev_threshold = config["stddev_threshold"].as<double>();
@@ -50,114 +48,79 @@ pcd_georef::pcd_georef(
   this->config_.fake_ind = config["fake_ind"].as<std::vector<int64_t>>();
   this->config_.fake_ind_dist = config["fake_ind_dist"].as<std::vector<double>>();
   this->config_.fake_ind_height = config["fake_ind_height"].as<std::vector<double>>();
-  this->config_.use_threading = config["use_threading"].as<bool>();
   this->config_.num_cores = config["num_cores"].as<int>();
-  this->config_.customZeroPoint = config["customZeroPoint"].as<bool>();
-  this->config_.zeroPoint = config["zeroPoint"].as<std::vector<double>>();
-
-  // Initialize dimension of transformation
-  if (this->config_.dim == 2) {
-    this->umeyama_ = std::make_shared<Umeyama_2D>();
-    this->triag_ = std::make_shared<Delaunay_2D>();
-  } else if (this->config_.dim == 3) {
-    this->umeyama_ = std::make_shared<Umeyama_3D>();
-    this->triag_ = std::make_shared<Delaunay_3D>();
-  } else {
-    throw std::invalid_argument("Invalid Dimension!");
-  }
+  this->config_.custom_origin = config["custom_origin"].as<bool>();
+  this->config_.origin = config["origin"].as<std::vector<double>>();
 
   // Check if all paths contain data
   if (!paths_valid()) return;
 
-  // Load trajectory, SLAM poses, ref map and download osm-data
+  // Load data and point cloud map
   load_data();
 
-  // Align GPS and SLAM trajectory
+  // Align global positions and poses with Umeyama algorithm
   align_traj();
 
-  // Publish trajectory to select control Points for Rubber-Sheeting
+  // Visualize aligned trajectories
   visualize_traj();
 
-  // Perform rubber-sheeting to further transform traj and map
+  // Perform rubber-sheeting to further align poses to global positions
   rubber_sheeting();
 
   // Publish rubber-sheeting data
   visualize_rs();
 
   // Write pcd to file
-  write_map();
+  save_map();
 
   // Analysis and save
-  evaluation();
+  evaluation(config);
 
   std::cout << "\033[1;36m===> Done!\033[0m" << std::endl;
 }
 /**
  * @brief check if all necessary paths exist
  */
-bool pcd_georef::paths_valid()
+bool Georeferencing::paths_valid()
 {
-  bool allValid = true;
+  bool valid = true;
 
-  // Check traj_path
-  std::ifstream infile(this->config_.traj_path);
-  if (infile.is_open()) {
-    infile.close();
-  } else {
-    std::cout << "File to trajectory (traj_path) doesn't exist" << std::endl;
-    allValid = false;
-  }
-
-  // Check poses_path
-  std::ifstream infile2(this->config_.poses_path);
-  if (infile2.is_open()) {
-    infile2.close();
-  } else {
-    std::cout << "File to poses (poses_path) doesn't exist" << std::endl;
-    allValid = false;
-  }
-
-  // Check pcd path if true
-  if (this->config_.pcd_path != "") {
-    std::ifstream infile2(this->config_.pcd_path);
-    if (infile2.is_open()) {
-      infile2.close();
-    } else {
-      std::cout << "File to pcd (pcd_path) doesn't exist" << std::endl;
-      allValid = false;
+  auto check_file = [&valid](const std::string & path, const std::string & name) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+      std::cout << "File to " << name << " (" << name << "_path) doesn't exist" << std::endl;
+      valid = false;
     }
+  };
+
+  check_file(this->config_.pos_global_path, "trajectory");
+  check_file(this->config_.poses_path, "poses");
+
+  if (this->config_.pcd_path != "") {
+    check_file(this->config_.pcd_path, "pcd");
   }
 
-  return allValid;
+  return valid;
 }
 /**
  * @brief load trajectories and pcd map
  */
-void pcd_georef::load_data()
+void Georeferencing::load_data()
 {
   // GPS trajectory
-  if (file_io_->read_traj_from_file(this->config_, this->config_.traj_path, traj_proj)) {
-    std::cout << "\033[1;36m===> Trajectory with " << this->traj_proj.size()
-              << " points: Loaded!\033[0m" << std::endl;
-    std::cout.precision(17);
-    // std::cout << this->get_parameter("orig_lat").as_double() << std::endl <<
-    //  this->get_parameter("orig_lon").as_double() << std::endl;
-  } else {
-    std::cout << "!! Error during Trajectory loading !!" << std::endl;
-  }
+  this->pos_global_ = file_io_->load_positions(this->config_.pos_global_path, this->config_);
+  std::cout << "\033[1;36m===> Trajectory with " << this->pos_global_.size()
+            << " points: Loaded!\033[0m" << std::endl;
 
-  // SLAM poses
-  if (file_io_->read_poses_SLAM_from_file(this->config_, this->config_.poses_path, traj_SLAM)) {
-    std::cout << "\033[1;36m===> Poses with " << traj_SLAM.size() << " points: Loaded!\033[0m"
-              << std::endl;
-  } else {
-    std::cout << "!! Error during Pose loading !!" << std::endl;
-  }
+  // Map poses
+  this->poses_ = file_io_->load_poses(this->config_.poses_path);
+  std::cout << "\033[1;36m===> Poses with " << this->poses_.size() << " points: Loaded!\033[0m"
+            << std::endl;
 
   // PCD map
   if (this->config_.pcd_path != "") {
-    if (file_io_->read_pcd_from_file(this->config_, this->config_.pcd_path, this->pcd_map)) {
-      std::cout << "\033[1;36mPoint Cloud with " << pcd_map->width * pcd_map->height
+    if (file_io_->load_pcd(this->config_.pcd_path, this->pcd_map_)) {
+      std::cout << "\033[1;36mPoint Cloud with " << pcd_map_->width * pcd_map_->height
                 << " points: Loaded!\033[0m" << std::endl;
     } else {
       std::cout << "!! Error during PCD loading !!" << std::endl;
@@ -167,15 +130,14 @@ void pcd_georef::load_data()
 /**
  * @brief align trajectories with Umeyama algorithm
  */
-void pcd_georef::align_traj()
+void Georeferencing::align_traj()
 {
   // Calculate transformation
-  bool bumeyama =
-    transform_.get_umeyama(this->config_, this->traj_proj, this->traj_SLAM, this->umeyama_);
+  bool bumeyama = transform_.get_umeyama(this->pos_global_, this->poses_, this->umeyama_);
 
   // Transform poses and lanelet2 map (3D)
   bool btrans_umeyama =
-    transform_.transform_ls_al(this->traj_SLAM, this->traj_align, this->umeyama_);
+    transform_.transform_ls_al(this->poses_, this->poses_align_, this->umeyama_);
 
   if (bumeyama && btrans_umeyama) {
     std::cout << "\033[1;36m===> Trajectory and SLAM poses aligned with Umeyama-algorithm!\033[0m"
@@ -187,41 +149,36 @@ void pcd_georef::align_traj()
 /**
  * @brief publish resulting trajectories from alignment
  */
-void pcd_georef::visualize_traj()
+void Georeferencing::visualize_traj()
 {
   // Spawn a rerun stream
   this->rec_.spawn().exit_on_failure();
 
   // // Trajectory
-  viz_->linestring2rerun(this->traj_proj, this->rec_, "WEBGreen", "Trajectory");
-  viz_->linestring2rerun(this->traj_SLAM, this->rec_, "Black", "Trajectory_SLAM");
-  viz_->linestring2rerun(this->traj_align, this->rec_, "WEBBlueDark", "Trajectory_align");
+  viz_->linestring2rerun(this->pos_global_, this->rec_, "WEBGreen", "Trajectory");
+  viz_->linestring2rerun(this->poses_, this->rec_, "Black", "Trajectory_SLAM");
+  viz_->linestring2rerun(this->poses_align_, this->rec_, "WEBBlueDark", "Trajectory_align");
 }
 /**
  * @brief apply automatic or manual rubber-sheet trafo and transform map
  *        and trajectories
  */
-void pcd_georef::rubber_sheeting()
+void Georeferencing::rubber_sheeting()
 {
   // Get controlpoints from RVIZ
   transform_.select_control_points(
-    this->config_, this->traj_proj, this->traj_align, this->control_points);
+    this->config_, this->pos_global_, this->poses_align_, this->control_points_);
 
   // Calculate triangulation and transformation matrices
   bool btrans_rs = transform_.get_rubber_sheeting(
-    this->config_, this->traj_align, this->control_points, this->triag_);
+    this->config_, this->poses_align_, this->control_points_, this->triag_);
 
   // Transform trajectory
-  transform_.transform_ls_rs(this->traj_align, this->traj_rs, this->triag_);
+  transform_.transform_ls_rs(this->poses_align_, this->poses_rs_, this->triag_);
 
   // Transform point cloud map if desired by user
   if (this->config_.pcd_path != "") {
-    if (this->config_.use_threading) {
-      transform_.transform_pcd(
-        this->umeyama_, this->triag_, this->pcd_map, this->config_.num_cores);
-    } else {
-      transform_.transform_pcd(this->umeyama_, this->triag_, this->pcd_map);
-    }
+    transform_.transform_pcd(this->umeyama_, this->triag_, this->pcd_map_, this->config_.num_cores);
   }
 
   if (btrans_rs) {
@@ -233,28 +190,28 @@ void pcd_georef::rubber_sheeting()
 /**
  * @brief publish results from rubber-sheeting including transformed map
  */
-void pcd_georef::visualize_rs()
+void Georeferencing::visualize_rs()
 {
   // Visualize in rerun
-  this->viz_->rs2rerun(this->control_points, this->triag_, this->rec_, "Blue");
-  this->viz_->linestring2rerun(this->traj_rs, this->rec_, "Orange", "Trajectory_RS");
+  this->viz_->rs2rerun(this->control_points_, this->triag_, this->rec_, "Blue");
+  this->viz_->linestring2rerun(this->poses_rs_, this->rec_, "Orange", "Trajectory_RS");
 
   // PCD map
   if (this->config_.pcd_path != "") {
-    this->viz_->pc_map2rerun(this->pcd_map, this->rec_);
+    this->viz_->pc_map2rerun(this->pcd_map_, this->rec_);
   }
 }
 /**
  * @brief write pcd map to file
  */
-void pcd_georef::write_map()
+void Georeferencing::save_map()
 {
   if (this->config_.pcd_path != "") {
     std::string path =
       this->config_.pcd_path.substr(0, this->config_.pcd_path.find_last_of("\\/")) + "/georef_" +
       this->config_.pcd_path.substr(this->config_.pcd_path.find_last_of("/\\") + 1);
 
-    if (file_io_->write_pcd_to_path(path, this->pcd_map)) {
+    if (file_io_->save_pcd(path, this->pcd_map_)) {
       std::cout << "\033[1;36mPoint Cloud Map written to " << path << "!\033[0m" << std::endl;
     } else {
       std::cout << "!! Error during Map writing !!" << std::endl;
@@ -263,14 +220,28 @@ void pcd_georef::write_map()
 }
 /**
  * @brief do evaluation calculations and write to txt-files
+ * 
+ * @param[in] config               - YAML::Node:
+ *                                  configuration node
  */
-void pcd_georef::evaluation()
+void Georeferencing::evaluation(const YAML::Node & config)
 {
-  std::vector<double> diff_al;
-  std::vector<double> diff_rs;
-  bool saved = this->analysis_->traj_matching(
-    this->config_, this->traj_proj, this->traj_SLAM, this->traj_align, this->traj_rs, this->triag_,
-    this->control_points, diff_al, diff_rs);
+  // Create output directory
+  // Set working directory to current path
+  const std::string dir = "./georeferencing_output";
+  // Create if not a directory
+  if (!std::filesystem::is_directory(dir)) {
+    std::filesystem::create_directories(dir);
+  }
+
+  // Dump config file to output directory
+  std::ofstream fout(dir + "/georeferencing_config.yaml");
+  fout << config;
+  fout.close();
+
+  // Trajectory matching analysis and export
+  this->analysis_->traj_matching(dir, this->pos_global_, this->poses_, this->poses_align_, this->poses_rs_,
+    this->triag_, this->control_points_);
 
   std::cout << "\033[1;36m===> Analysis calculations saved in Output directory!\033[0m"
             << std::endl;
@@ -291,9 +262,9 @@ int main(int argc, char * argv[])
     return 1;
   }
   if (argc == 4) {
-    flexcloud::pcd_georef pcd_georef(argv[1], argv[2], argv[3], "");
+    flexcloud::Georeferencing georef(argv[1], argv[2], argv[3], "");
   } else if (argc == 5) {
-    flexcloud::pcd_georef pcd_georef(argv[1], argv[2], argv[3], argv[4]);
+    flexcloud::Georeferencing georef(argv[1], argv[2], argv[3], argv[4]);
   } else {
     std::cerr << "Too many arguments" << std::endl;
     return 1;

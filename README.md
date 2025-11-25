@@ -6,6 +6,11 @@ Georeferencing of Point Cloud Maps
 
 [![Linux](https://img.shields.io/badge/os-linux-blue.svg)](https://www.linux.org/)
 [![Docker](https://badgen.net/badge/icon/docker?icon=docker&label)](https://www.docker.com/)
+![C++](https://img.shields.io/badge/-C++-blue?logo=cplusplus)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
+[![arXiv](https://img.shields.io/badge/arXiv-1234.56789-b31b1b.svg)](https://arxiv.org/abs/2502.00395)
+[![DOI:10.5220/0013405400003941](https://img.shields.io/badge/DOI-10.5220/0013405400003941-00629B.svg)](https://doi.org/10.5220/0013359600003941)
+
 
 <img src="doc/viz.gif" width="800"/>
 </div>
@@ -63,12 +68,12 @@ If you are struggling with their installation, you can have a look at the proces
 
 <h3> Keyframe Interpolation</h3>
 
-* set parameters in `/config/select_keyframes.yaml`
+* set parameters in `/config/keyframe_interpolation.yaml`
 
 1. Necessary input parameters:
    * `config_path` => path to [config-file](./config/select_keyframes.yaml)
    * `pos_dir_path` => path to raw GNSS/reference trajectory of the vehicle (format: txt-file with `lat, lon, ele, lat_stddev, lon_stddev, ele_stddev` or `x, y, z, x_stddev, y_stddev, z_stddev`, if the reference trajectory is already in local coordinates)
-   * `kitti_odom_path` => path to SLAM trajectory of the vehicle (KITTI-format)
+   * `poses_path` => path to SLAM trajectory of the vehicle (GLIM-format)
    * `dst_dir_path` => path to output trajectory
 
 * make sure the data follows the following format/requirements:
@@ -76,9 +81,8 @@ If you are struggling with their installation, you can have a look at the proces
 <!-- markdownlint-disable MD013 -->
 | Description | Format |
 | ----------- | ----------- |
-| global positions (usually from GNSS or an EKF using GNSS) | individual `.txt` files per position in a directory specify position in `xpos ypos zpos x_stddev y_stddev z_stddev`. The files are named according to the UTC-timestamp of the position in the format `sec_nanosec`. |
-| inertial LiDAR trajectory (usually from a LiDAR odometry/SLAM algorithm) | single `.txt` file in KITTI-format: `r1 r2 r3 x r4 r5 r6 y r7 r8 r9 z` |
-| point cloud frames corresponding to LiDAR trajectory | individual `.pcd` files per cloud in a directory. The files are named according to the UTC-timestamp of the position in the format `sec_nanosec`. |
+| global positions (usually from GNSS or an EKF using GNSS) | individual `.txt` files per position in a directory specify position in `stamp xpos ypos zpos x_stddev y_stddev z_stddev`. The files are named according to the UTC-timestamp of the position in the format `sec_nanosec`. |
+| inertial LiDAR trajectory (currently the API is designed for [glim](https://github.com/koide3/glim)) | single `.txt` file in KITTI-format: `stamp xpos ypos zpos xquat yquat zquat wquat` |
 <!-- markdownlint-enable MD013 -->
 
 * the executable selects keyframes from the LiDAR trajectory (keyframes are based on minimum longitudinal distance
@@ -96,7 +100,7 @@ computed in two ways (based on the parameter `interpolated`):
 * to run the keyframe interpolation, simply execute the executable with the necessary data and config as arguments:
 
 ```bash
-./select_keyframes <config_path> <pos_dir_path> <kitti_odom_path> <dst_dir_path>
+./keyframe_interpolation <config_path> <pos_dir_path> <poses_path> <dst_dir_path>
 ```
 
 * the output of the Keyframe Interpolation is designed to be compatible with the georeferencing.
@@ -106,21 +110,19 @@ computed in two ways (based on the parameter `interpolated`):
 
 1. Necessary input parameters:
    * `config_path` => path to [config-file](./config/pcd_georef.yaml)
-   * `traj_path` => path to GNSS/reference trajectory of the vehicle (format: single txt-file with `lat, lon, ele, lat_stddev, lon_stddev, ele_stddev` or `x, y, z, x_stddev, y_stddev, z_stddev`, if the reference trajectory is already in local coordinates)
+   * `positions_path` => path to GNSS/reference trajectory of the vehicle (format: single txt-file with `lat, lon, ele, lat_stddev, lon_stddev, ele_stddev` or `x, y, z, x_stddev, y_stddev, z_stddev`, if the reference trajectory is already in local coordinates)
    * `poses_path` => path to SLAM trajectory of the vehicle (KITTI-format)
    * `pcd_path` => path to point cloud map corresponding to poses trajectory (OPTIONAL - only if yout want to transform the pointcloud)
 
 2. Start the package
 
    ```bash
-   Usage: ./build/pcd_georef <config_path> <reference_path> <slam_path> <(optional) pcd_path>>
+   Usage: ./build/georeferencing <config_path> <positions> <poses_path> <(optional) pcd_path>>
    ```
-
-   To use the provided test data (only trajectories, no application on point cloud map -> set parameter `transform_pcd` to `false`)
 
    ```bash
    cd flexcloud/
-   ./build/pcd_georef src/flexcloud/config/pcd_georef.yaml src/flexcloud/test/poseData.txt src/flexcloud/test/poses_map.txt 
+   ./build/pcd_georef src/flexcloud/config/pcd_georef.yaml src/flexcloud/test/positions_interpolated.txt src/flexcloud/test/poses_keyframes.txt 
    ```
 
 3. Inspect results
@@ -202,9 +204,9 @@ Detailed documentation of the modules can be found below.
 
 <h2>📈 Test Data </h2>
 
-The data was recorded by the [TUM Autonomous Motorsport Team](https://www.mos.ed.tum.de/ftm/forschungsfelder/team-av-perception/tum-autonomous-motorsport/) during the [Abu Dhabi Autonomous Racing League](https://a2rl.io/) 2024.
-The SLAM trajectory is created using [KISS-ICP](https://github.com/PRBonn/kiss-icp) in combination with [Interactive SLAM](https://github.com/SMRT-AIST/interactive_slam).
-The reference trajectory presents post-processed data from the RTK-corrected GNSS-signal of the vehicle.
+The data was recorded by the [TUM Autonomous Motorsport Team](https://www.mos.ed.tum.de/ftm/forschungsfelder/team-av-perception/tum-autonomous-motorsport/) during the [Abu Dhabi Autonomous Racing League](https://a2rl.io/) 2025.
+The LiDAR/SLAM trajectory is created using [glim](https://github.com/koide3/glim).
+The reference trajectory presents raw data from the RTK-corrected GNSS-signal of the vehicle.
 
 <h2>📇 Developers </h2>
 

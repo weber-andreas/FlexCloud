@@ -25,22 +25,23 @@
 #include <utility>
 #include <vector>
 
+#include "yaml-cpp/yaml.h"
+
 #include "analysis.hpp"
 #include "file_io.hpp"
-#include "param_pcd_georef.hpp"
 #include "transform.hpp"
 #include "visualization.hpp"
 namespace flexcloud
 {
 /**
- * @brief basic class for flexcloud::pcd_georef package
+ * @brief basic class for flexcloud::Georeferencing package
  */
-class pcd_georef
+class Georeferencing
 {
 public:
-  // pcd_georef package constructor
-  pcd_georef(
-    const std::string & config_path, const std::string & ref_path, const std::string & slam_path,
+  // Georeferencing package constructor
+  Georeferencing(
+    const std::string & config_path, const std::string & pos_global_path, const std::string & poses_path,
     const std::string & pcd_path);
   // Functions
   /**
@@ -77,36 +78,38 @@ public:
   /**
    * @brief write pcd map to file
    */
-  void write_map();
+  void save_map();
 
   /**
    * @brief do evaluation calculations and write to txt-files
+   * 
+   * @param[in] config               - YAML::Node:
+   *                                  configuration node
    */
-  void evaluation();
+  void evaluation(const YAML::Node & config);
 
 private:
   // Config
-  FlexCloudConfig config_{};
+  GeoreferencingConfig config_{};
 
   // Module classes
-  std::shared_ptr<file_io> file_io_;
-  transform transform_;
-  std::shared_ptr<visualization> viz_;
-  std::shared_ptr<analysis> analysis_;
+  transform transform_{};
+  std::shared_ptr<file_io> file_io_ = std::make_shared<file_io>();
+  std::shared_ptr<visualization> viz_ = std::make_shared<visualization>();
+  std::shared_ptr<analysis> analysis_ = std::make_shared<analysis>();
 
   // Objects
-  // Trajectories
-  std::vector<PointStdDev> traj_proj;
-  std::vector<PointStdDev> traj_SLAM;
-  std::vector<PointStdDev> traj_align;
-  std::vector<PointStdDev> traj_rs;
+  std::vector<PointStdDevStamped> pos_global_{};
+  std::vector<PoseStamped> poses_{};
+  std::vector<PoseStamped> poses_align_{};
+  std::vector<PoseStamped> poses_rs_{};
   // PCD map
-  pcl::PointCloud<pcl::PointXYZI>::Ptr pcd_map;
+  pcl::PointCloud<pcl::PointXYZI>::Ptr pcd_map_{};
 
   // Transformation
-  std::vector<ControlPoint> control_points;
-  std::shared_ptr<Umeyama> umeyama_;
-  std::shared_ptr<Delaunay> triag_;
+  std::vector<ControlPoint> control_points_;
+  std::shared_ptr<Umeyama> umeyama_ = std::make_shared<Umeyama>();
+  std::shared_ptr<Delaunay> triag_ = std::make_shared<Delaunay>();
 
   // Visualization
   rerun::RecordingStream rec_ = rerun::RecordingStream("flexcloud");
